@@ -322,5 +322,7 @@ class ReportParser(object):
             return "Netsparker"
         elif "maltego" == tag:
             return "Maltego"
+        elif "vuls" == tag:
+            return "Vuls"
         else:
             return None
