@@ -13,6 +13,7 @@ import re
 import os
 import sys
 import json
+import time
 
 try:
     import xml.etree.cElementTree as ET
@@ -79,17 +80,15 @@ class VulsPlugin(core.PluginBase):
     def parseOutputString(self, output, debug=False):
         j = None
         try:
-            tree = ET.fromstring(output)
-            j = tree.findtext(".//data")
-            j = json.loads(j)
+            xml = ET.fromstring(output)
         except Exception as e:
             print "Exception - %s" % e
 
         # TODO: output IP address to json report
         # TODO: output MAC Address to json report
-        ip = "127.0.0.1"
-        os = j['Family'] + "/" + j["Release"]
-        host = j["ServerName"]
+        ip = xml.findtext("ScanResult/ServerName")
+        os = xml.findtext("ScanResult/Family") + "/" + xml.findtext("ScanResult/Release")
+        host = ip
         mac = "00:00:00:00:00:00"
         h_id = self.createAndAddHost(ip,os)
 
@@ -98,25 +97,39 @@ class VulsPlugin(core.PluginBase):
         else:
             i_id = self.createAndAddInterface(h_id, ip, mac, ipv6_address=ip, hostname_resolution=host)
 
+        vuls = []
         for k in ['KnownCves','UnknownCves']:
-            for v in j[k]:
-                severity = self.scoreToString(v['CveDetail']['Nvd']['Score'])
+            cves = xml.findall("./ScanResult/" + k)
+            for v in cves:
+                cve = v.find("./CveDetail")
+                severity = self.scoreToString(float(cve.findtext('Nvd/Score')))
 
-                resolution = ""
                 ref = []
-                ref.append(v["CveDetail"]["CveID"])
-                desc = v["CveDetail"]["Nvd"]["Summary"]
-                if v["CveDetail"]["Nvd"]["References"]:
-                    for r in v["CveDetail"]["Nvd"]["References"]:
-                        ref.append(r["Link"])
-                for pkg in v['Packages']:
-                    name = pkg['Name']
-                    ver = ["Installed:" + pkg['Version'],"Candidate:" + pkg['NewVersion']]
-                    if pkg['Release'] != "":
-                        ver[0] += "/" + pkg["Release"]
-                    if pkg["NewRelease"] != "":
-                        ver[1] += "/" + pkg["NewRelease"]
-                    self.createAndAddVulnToHost(h_id, name, desc, ref+ver, severity=severity, resolution=resolution)
+                cveid = cve.findtext("CveID")
+                ref.append(cveid)
+                desc = cveid
+                summary =  cve.findtext("Nvd/Summary")
+                if summary:
+                    desc += "\n" + summary
+                refs = cve.findtext("Nvd/References")
+                if refs:
+                    for r in refs:
+                        ref.append(r.findtext("Link"))
+                for pkg in v.findall("Packages"):
+                    name = pkg.findtext("Name")
+                    ver = ["Installed:" + pkg.findtext("Version"),
+                           "Candidate:" + pkg.findtext("NewVersion")]
+                    release = pkg.findtext("Release")
+                    if release != "":
+                        ver[0] += "/" + release
+                    newrelease = pkg.findtext("NewRelease")
+                    if newrelease != "":
+                        ver[1] += "/" + newrelease
+                    vuls.append([h_id,name,desc,ref+ver,severity])
+
+        for i,v in enumerate(vuls):
+            v_id = self.createAndAddVulnToHost(v[0], v[1], v[2], v[3], severity=v[4])
+            #self.log(str(v_id))
         return True
 
     def _isIPV4(self, ip):
